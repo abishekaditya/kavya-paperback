@@ -1,6 +1,6 @@
 ### This is a personal fork to fix an error I encountered when adding a new comic/manga for tracking. It resulted in no search results and an error message, leaving you unable to track what you bookmarked, which is required for syncing read status. This error occurred after updating Kavita past v.0.8.8.3 (I personally noticed it on version v0.9.0.2). I also included the Reading List support that has been stuck in limbo on the main repo since last year.
 
-##### My themes for Paperback are available here: [`https://github.com/KenWeTech/themes-paperback`](https://github.com/KenWeTech/themes-paperback)
+##### My themes for Paperback are available here: [`https://github.com/abishekaditya/themes-paperback`](https://github.com/abishekaditya/themes-paperback)
 
 -----
 
@@ -23,7 +23,7 @@ Step 2 -
 
 You can install kavya paperback extension source from url below:
 
-[`https://KenWeTech.github.io/kavya-paperback`](https://KenWeTech.github.io/kavya-paperback)
+[`https://abishekaditya.github.io/kavya-paperback`](https://abishekaditya.github.io/kavya-paperback)
 
 Step 3 -
 **Finding Your Kavita API Key:**

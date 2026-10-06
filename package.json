@@ -1,6 +1,6 @@
 {
 	"name": "extensions-main",
-	"repositoryName": "KenWeTech's Extensions",
+	"repositoryName": "abishekaditya's Extensions",
 	"version": "1.3.6-fix",
 	"description": "KenWeTech's Fork of the Paperback extension repository",
 	"main": "index.js",
@@ -14,7 +14,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/KenWeTech/kavya-paperback.git"
+		"url": "git+https://github.com/abishekaditya/kavya-paperback.git"
 	},
 	"author": "KenWeTech",
 	"license": "BSD-2-Clause",
