@@ -2,14 +2,14 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    types: [closed]
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: publish-sources
+  cancel-in-progress: false
 
 name: Bundle and Publish Sources
 

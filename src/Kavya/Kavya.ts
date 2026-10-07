@@ -44,12 +44,12 @@ const sortHelper = (a: any, b: any) => {
 }
 
 export const KavyaInfo: SourceInfo = {
-	version: '1.3.6-fix',
+	version: '1.3.7',
 	name: 'Kavya',
 	icon: 'icon.png',
-	author: 'KenWeTech',
-	authorWebsite: 'https://github.com/KenWeTech',
-	description: 'Forked version of the Kavita client extension for Paperback',
+	author: 'Abishek Aditya',
+	authorWebsite: 'https://github.com/abishekaditya',
+	description: "Abishek Aditya's fork of the Kavita client extension for Paperback",
 	contentRating: ContentRating.EVERYONE,
 	websiteBaseURL: 'https://www.kavitareader.com/',
 	sourceTags: [
