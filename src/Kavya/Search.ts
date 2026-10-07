@@ -26,8 +26,11 @@ const FILTER_FIELD: Record<string, number> = {
 };
 // Translators, Characters, Publisher, Editor, CoverArtist, Letterer, Colorist,
 // Inker, Penciller, Writers, Imprint, Team and Location. Kavita 0.8.4+ no
-// longer reports a person's role, so people are matched in any role.
+// longer reports a person's role, so a person is looked up under every role.
+// Kavita maps the Colorist field to the Inker role, so on 0.8.4+ people
+// credited only as colorist cannot be found.
 const PERSON_FILTER_FIELDS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 29, 30, 31];
+const WRITERS_FILTER_FIELD = 17;
 
 async function filterSeries(
 	statements: { comparison: number, field: number, value: string }[],
@@ -47,12 +50,29 @@ async function filterSeries(
 	});
 
 	const response = await requestManager.schedule(request, 1);
-	const result = JSON.parse(response.data || '[]');
+	// Fail loudly: an empty list here is what hid the removal of /Series/all.
+	if (response.status >= 400) {
+		throw new Error(`Kavita returned HTTP ${response.status} for a series filter`);
+	}
+
+	const result = parseJSON(response.data, []);
 	return Array.isArray(result) ? result : [];
 }
 
-function personStatements(personIds: number[]) {
-	return PERSON_FILTER_FIELDS.map((field) => ({ comparison: FILTER_COMPARISON_CONTAINS, field: field, value: personIds.join(',') }));
+function parseJSON(data: string | undefined, fallback: any): any {
+	try {
+		return data ? JSON.parse(data) : fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+function personStatements(people: { id: number, role?: number }[]) {
+	// Before Kavita 0.8.4 a person has one id per role and every person field
+	// ignores the role, so one field is enough. Kavita 0.7.x also lacks fields 29-31.
+	const fields = people.some((person) => person.role !== undefined) ? [WRITERS_FILTER_FIELD] : PERSON_FILTER_FIELDS;
+	const value = people.map((person) => person.id).join(',');
+	return fields.map((field) => ({ comparison: FILTER_COMPARISON_CONTAINS, field: field, value: value }));
 }
 
 function seriesTile(series: any, kavitaAPI: { url: string, key: string }): PartialSourceManga {
@@ -107,50 +127,54 @@ export async function searchRequest(
 		const includedTags = searchQuery.includedTags ?? [];
 
 		const titleSearchTiles: PartialSourceManga[] = [];
-		const titleSearchIds: number[] = [];
+		const titleSearchIds = new Set<number>();
 
 		if (hasTitle) {
 			const titleRequest = App.createRequest({
 				url: `${kavitaAPI.url}/Search/search`,
-				param: `?queryString=${encodeURIComponent(searchQuery.title ?? '')}`,
+				param: `?queryString=${encodeURIComponent(searchQuery.title ?? '')}&includeChapterAndFiles=false`,
 				method: 'GET'
 			});
 	
 			// We don't want to throw if the server is unavailable
 			const titleResponse = await requestManager.schedule(titleRequest, 1);
-			const titleResult = titleResponse.data ? JSON.parse(titleResponse.data) : {};
+			// Kavita answers with plain text when no library is included in search
+			const titleResult = titleResponse.status < 400 ? parseJSON(titleResponse.data, {}) : {};
 	
 			for (const manga of titleResult.series ?? []) {
-				if (excludeLibraryIds.includes(manga.libraryId) || titleSearchIds.includes(manga.seriesId)) {
+				if (excludeLibraryIds.includes(manga.libraryId) || titleSearchIds.has(manga.seriesId)) {
 					continue;
 				}
 	
-				titleSearchIds.push(manga.seriesId);
+				titleSearchIds.add(manga.seriesId);
 				titleSearchTiles.push(seriesTile({ id: manga.seriesId, name: manga.name }, kavitaAPI));
 			}
 	
 			if (enableRecursiveSearch) {
 				const statementLists = [
-					...(titleResult.persons ?? []).map((item: any) => personStatements([item.id])),
+					...(titleResult.persons ?? []).map((item: any) => personStatements([item])),
 					...(titleResult.genres ?? []).map((item: any) => [{ comparison: FILTER_COMPARISON_CONTAINS, field: FILTER_FIELD['genres'], value: `${item.id}` }]),
 					...(titleResult.tags ?? []).map((item: any) => [{ comparison: FILTER_COMPARISON_CONTAINS, field: FILTER_FIELD['tags'], value: `${item.id}` }])
 				];
 	
-				for (const statements of statementLists) {
-					for (const manga of await filterSeries(statements, FILTER_COMBINATION_OR, requestManager, kavitaAPI)) {
-						if (excludeLibraryIds.includes(manga.libraryId) || titleSearchIds.includes(manga.id)) {
-							continue;
-						}
+				// Extra matches are best effort, so a failed lookup only drops its own results
+				const seriesLists = await Promise.all(statementLists.map((statements) =>
+					filterSeries(statements, FILTER_COMBINATION_OR, requestManager, kavitaAPI).catch(() => [])
+				));
 
-						titleSearchIds.push(manga.id);
-						titleSearchTiles.push(seriesTile(manga, kavitaAPI));
+				for (const manga of seriesLists.flat()) {
+					if (excludeLibraryIds.includes(manga.libraryId) || titleSearchIds.has(manga.id)) {
+						continue;
 					}
+
+					titleSearchIds.add(manga.id);
+					titleSearchTiles.push(seriesTile(manga, kavitaAPI));
 				}
 			}
 		}
 	
-		// Series matching every picked tag: all picked genres, all picked tags,
-		// and each picked person in any role. null means no tag was picked.
+		// Series matching every picked tag: all picked genres, all picked tags
+		// and each picked person. null means no tag was picked.
 		let tagSeries: any[] | null = null;
 
 		if (includedTags.length > 0) {
@@ -161,8 +185,8 @@ export async function searchRequest(
 				const [type, id] = tag.id.split('-');
 				if (type === 'people') {
 					peopleNames.push(tag.label);
-				} else if (type !== undefined && FILTER_FIELD[type] !== undefined) {
-					tagIds[type] = [...(tagIds[type] ?? []), parseInt(id ?? '')];
+				} else if (type !== undefined && FILTER_FIELD[type] !== undefined && /^\d+$/.test(id ?? '')) {
+					tagIds[type] = [...(tagIds[type] ?? []), Number(id)];
 				}
 			}
 
@@ -185,23 +209,24 @@ export async function searchRequest(
 				});
 		
 				const peopleResponse = await requestManager.schedule(peopleRequest, 1);
-				const peopleResult = JSON.parse(peopleResponse.data || '[]');
+				const peopleResult = parseJSON(peopleResponse.data, []);
 
 				for (const name of peopleNames) {
-					const personIds = peopleResult.filter((person: any) => person.name === name).map((person: any) => person.id);
-					seriesLists.push(personIds.length > 0 ? await filterSeries(personStatements(personIds), FILTER_COMBINATION_OR, requestManager, kavitaAPI) : []);
+					const people = Array.isArray(peopleResult) ? peopleResult.filter((person: any) => person.name === name) : [];
+					seriesLists.push(people.length > 0 ? await filterSeries(personStatements(people), FILTER_COMBINATION_OR, requestManager, kavitaAPI) : []);
 				}
 			}
 
-			tagSeries = (seriesLists[0] ?? []).filter((series) => seriesLists.every((list) => list.some((other) => other.id === series.id)));
-			tagSeries = tagSeries.filter((series) => !excludeLibraryIds.includes(series.libraryId));
+			const [firstList = [], ...otherLists] = seriesLists;
+			const otherIds = otherLists.map((list) => new Set(list.map((series) => series.id)));
+			tagSeries = firstList.filter((series) => otherIds.every((ids) => ids.has(series.id)) && !excludeLibraryIds.includes(series.libraryId));
 		}
 
 		if (tagSeries === null) {
 			result = titleSearchTiles;
 		} else {
 			const tagSearchTiles = tagSeries.map((series) => seriesTile(series, kavitaAPI));
-			result = hasTitle ? tagSearchTiles.filter((tile) => titleSearchIds.includes(parseInt(tile.mangaId))) : tagSearchTiles;
+			result = hasTitle ? tagSearchTiles.filter((tile) => titleSearchIds.has(parseInt(tile.mangaId))) : tagSearchTiles;
 		}
 
 		cacheManager.setCachedData(searchRequestToString(searchQuery), result);

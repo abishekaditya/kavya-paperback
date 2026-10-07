@@ -58,6 +58,7 @@ Set up page size in kavya setting page, 20 for iOS and 40 for iPadOS (Default is
 
 - Each series you want to track have to be added to a collection and track list.
 - Tracking only works when you read the comic in the viewer (does not work with mark as read).
+- On Kavita 0.8.4 and later, searching for a person finds nothing for people credited only as colorist. Kavita's own filter looks colorists up as inkers.
 
 ## Unsupported Formats
 
