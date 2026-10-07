@@ -44,7 +44,7 @@ const sortHelper = (a: any, b: any) => {
 }
 
 export const KavyaInfo: SourceInfo = {
-	version: '1.3.7',
+	version: '1.3.8',
 	name: 'Kavya',
 	icon: 'icon.png',
 	author: 'Abishek Aditya',
@@ -229,7 +229,8 @@ export class Kavya implements ChapterProviding, HomePageSectionsProviding, Manga
 		const libraryResult = JSON.parse(libraryResponse.data || '[]');
 
 		for (const library of libraryResult) {
-			if (excludeUnsupportedLibrary && library.type === 2) continue;
+			// Book and light novel libraries, matching the exclusion in Search.ts
+			if (excludeUnsupportedLibrary && (library.type === 2 || library.type === 4)) continue;
 			includeLibraryIds.push(library.id);
 		}
 		
@@ -257,7 +258,7 @@ export class Kavya implements ChapterProviding, HomePageSectionsProviding, Manga
 							case 'people':
 								if (!names.includes(item.name)) {
 									names.push(item.name);
-									tags.push(App.createTag({id: `${tagName}-${item.role}.${item.id}`, label: item.name}))
+									tags.push(App.createTag({id: `${tagName}-${item.id}`, label: item.name}))
 								}
 								break;
 							default:
