@@ -1130,22 +1130,54 @@ var _Sources = (() => {
   }
 
   // src/Kavya/Search.ts
-  var KAVITA_PERSON_ROLES = {
-    "1": "other",
-    "2": "artist",
-    "3": "writers",
-    // KavitaAPI /api/series/all uses 'writers' instead of 'writer'
-    "4": "penciller",
-    "5": "inker",
-    "6": "colorist",
-    "7": "letterer",
-    "8": "coverArtist",
-    "9": "editor",
-    "10": "publisher",
-    "11": "character",
-    "12": "translators"
-    // KavitaAPI /api/series/all uses 'translators' instead of 'translator'
+  var FILTER_COMPARISON_CONTAINS = 5;
+  var FILTER_COMPARISON_MUST_CONTAIN = 6;
+  var FILTER_COMBINATION_OR = 0;
+  var FILTER_COMBINATION_AND = 1;
+  var FILTER_FIELD = {
+    tags: 6,
+    genres: 18
   };
+  var PERSON_FILTER_FIELDS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 29, 30, 31];
+  var WRITERS_FILTER_FIELD = 17;
+  async function filterSeries(statements, combination, requestManager, kavitaAPI) {
+    const request = App.createRequest({
+      url: `${kavitaAPI.url}/Series/v2`,
+      data: JSON.stringify({
+        statements,
+        combination,
+        sortOptions: { sortField: 1, isAscending: true },
+        limitTo: 0
+      }),
+      method: "POST"
+    });
+    const response = await requestManager.schedule(request, 1);
+    if (response.status >= 400) {
+      throw new Error(`Kavita returned HTTP ${response.status} for a series filter`);
+    }
+    const result = parseJSON(response.data, []);
+    return Array.isArray(result) ? result : [];
+  }
+  function parseJSON(data, fallback) {
+    try {
+      return data ? JSON.parse(data) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  function personStatements(people) {
+    const fields = people.some((person) => person.role !== void 0) ? [WRITERS_FILTER_FIELD] : PERSON_FILTER_FIELDS;
+    const value = people.map((person) => person.id).join(",");
+    return fields.map((field) => ({ comparison: FILTER_COMPARISON_CONTAINS, field, value }));
+  }
+  function seriesTile(series, kavitaAPI) {
+    return App.createPartialSourceManga({
+      title: series.name,
+      image: `${kavitaAPI.url}/image/series-cover?seriesId=${series.id}&apiKey=${kavitaAPI.key}`,
+      mangaId: `${series.id}`,
+      subtitle: void 0
+    });
+  }
   async function searchRequest(searchQuery, metadata, requestManager, interceptor, stateManager, cacheManager) {
     if (!await interceptor.isServerAvailable()) {
       return App.createPagedResults({
@@ -1169,116 +1201,88 @@ var _Sources = (() => {
         }
       }
     }
-    const titleSearchIds = [];
-    const tagSearchTiles = [];
-    const titleSearchTiles = [];
     let result = cacheManager.getCachedData(searchRequestToString(searchQuery));
     if (result === void 0) {
-      if (typeof searchQuery.title === "string" && searchQuery.title !== "") {
+      const hasTitle = typeof searchQuery.title === "string" && searchQuery.title !== "";
+      const includedTags = searchQuery.includedTags ?? [];
+      const titleSearchTiles = [];
+      const titleSearchIds = /* @__PURE__ */ new Set();
+      if (hasTitle) {
         const titleRequest = App.createRequest({
           url: `${kavitaAPI.url}/Search/search`,
-          param: `?queryString=${encodeURIComponent(searchQuery.title)}`,
+          param: `?queryString=${encodeURIComponent(searchQuery.title ?? "")}&includeChapterAndFiles=false`,
           method: "GET"
         });
         const titleResponse = await requestManager.schedule(titleRequest, 1);
-        const titleResult = titleResponse.data ? JSON.parse(titleResponse.data) : { series: [], persons: [], genres: [], tags: [] };
-        for (const manga of titleResult.series) {
-          if (excludeLibraryIds.includes(manga.libraryId)) {
+        const titleResult = titleResponse.status < 400 ? parseJSON(titleResponse.data, {}) : {};
+        for (const manga of titleResult.series ?? []) {
+          if (excludeLibraryIds.includes(manga.libraryId) || titleSearchIds.has(manga.seriesId)) {
             continue;
           }
-          titleSearchIds.push(manga.seriesId);
-          titleSearchTiles.push(
-            App.createPartialSourceManga({
-              title: manga.name,
-              image: `${kavitaAPI.url}/image/series-cover?seriesId=${manga.seriesId}&apiKey=${kavitaAPI.key}`,
-              mangaId: `${manga.seriesId}`,
-              subtitle: void 0
-            })
-          );
+          titleSearchIds.add(manga.seriesId);
+          titleSearchTiles.push(seriesTile({ id: manga.seriesId, name: manga.name }, kavitaAPI));
         }
         if (enableRecursiveSearch) {
-          const tagNames = ["persons", "genres", "tags"];
-          for (const tagName of tagNames) {
-            for (const item of titleResult[tagName]) {
-              let titleTagRequest;
-              switch (tagName) {
-                case "persons":
-                  titleTagRequest = App.createRequest({
-                    url: `${kavitaAPI.url}/Series/all`,
-                    data: JSON.stringify({ [KAVITA_PERSON_ROLES[item.role]]: [item.id] }),
-                    method: "POST"
-                  });
-                  break;
-                default:
-                  titleTagRequest = App.createRequest({
-                    url: `${kavitaAPI.url}/Series/all`,
-                    data: JSON.stringify({ [tagName]: [item.id] }),
-                    method: "POST"
-                  });
-              }
-              const titleTagResponse = await requestManager.schedule(titleTagRequest, 1);
-              const titleTagResult = JSON.parse(titleTagResponse.data || "[]");
-              for (const manga of titleTagResult) {
-                if (!titleSearchIds.includes(manga.id)) {
-                  titleSearchIds.push(manga.id);
-                  titleSearchTiles.push(
-                    App.createPartialSourceManga({
-                      title: manga.name,
-                      image: `${kavitaAPI.url}/image/series-cover?seriesId=${manga.id}&apiKey=${kavitaAPI.key}`,
-                      mangaId: `${manga.id}`,
-                      subtitle: void 0
-                    })
-                  );
-                }
-              }
+          const statementLists = [
+            ...(titleResult.persons ?? []).map((item) => personStatements([item])),
+            ...(titleResult.genres ?? []).map((item) => [{ comparison: FILTER_COMPARISON_CONTAINS, field: FILTER_FIELD["genres"], value: `${item.id}` }]),
+            ...(titleResult.tags ?? []).map((item) => [{ comparison: FILTER_COMPARISON_CONTAINS, field: FILTER_FIELD["tags"], value: `${item.id}` }])
+          ];
+          const seriesLists = await Promise.all(statementLists.map(
+            (statements) => filterSeries(statements, FILTER_COMBINATION_OR, requestManager, kavitaAPI).catch(() => [])
+          ));
+          for (const manga of seriesLists.flat()) {
+            if (excludeLibraryIds.includes(manga.libraryId) || titleSearchIds.has(manga.id)) {
+              continue;
             }
+            titleSearchIds.add(manga.id);
+            titleSearchTiles.push(seriesTile(manga, kavitaAPI));
           }
         }
       }
-      if (typeof searchQuery.includedTags !== "undefined") {
-        const body = {};
-        const peopleTags = [];
-        searchQuery.includedTags.forEach(async (tag) => {
-          switch (tag.id.split("-")[0]) {
-            case "people":
-              peopleTags.push(tag.label);
-              break;
-            default:
-              body[tag.id.split("-")[0] ?? ""] = body[tag.id.split("-")[0] ?? ""] ?? [];
-              body[tag.id.split("-")[0] ?? ""].push(parseInt(tag.id.split("-")[1] ?? "0"));
-          }
-        });
-        const peopleRequest = App.createRequest({
-          url: `${kavitaAPI.url}/Metadata/people`,
-          method: "GET"
-        });
-        const peopleResponse = await requestManager.schedule(peopleRequest, 1);
-        const peopleResult = JSON.parse(peopleResponse.data || "[]");
-        for (const people of peopleResult) {
-          if (peopleTags.includes(people.name)) {
-            body[KAVITA_PERSON_ROLES[people.role]] = body[KAVITA_PERSON_ROLES[people.role]] ?? [];
-            body[KAVITA_PERSON_ROLES[people.role]].push(people.id);
+      let tagSeries = null;
+      if (includedTags.length > 0) {
+        const tagIds = {};
+        const peopleNames = [];
+        for (const tag of includedTags) {
+          const [type, id] = tag.id.split("-");
+          if (type === "people") {
+            peopleNames.push(tag.label);
+          } else if (type !== void 0 && FILTER_FIELD[type] !== void 0 && /^\d+$/.test(id ?? "")) {
+            tagIds[type] = [...tagIds[type] ?? [], Number(id)];
           }
         }
-        const tagRequst = App.createRequest({
-          url: `${kavitaAPI.url}/Series/all`,
-          data: JSON.stringify(body),
-          method: "POST"
-        });
-        const tagResponse = await requestManager.schedule(tagRequst, 1);
-        const tagResult = JSON.parse(tagResponse.data || "[]");
-        for (const manga of tagResult) {
-          tagSearchTiles.push(
-            App.createPartialSourceManga({
-              title: manga.name,
-              image: `${kavitaAPI.url}/image/series-cover?seriesId=${manga.id}&apiKey=${kavitaAPI.key}`,
-              mangaId: `${manga.id}`,
-              subtitle: void 0
-            })
-          );
+        const seriesLists = [];
+        const statements = Object.entries(tagIds).map(([type, ids]) => ({
+          comparison: FILTER_COMPARISON_MUST_CONTAIN,
+          field: FILTER_FIELD[type] ?? 0,
+          value: ids.join(",")
+        }));
+        if (statements.length > 0) {
+          seriesLists.push(await filterSeries(statements, FILTER_COMBINATION_AND, requestManager, kavitaAPI));
         }
+        if (peopleNames.length > 0) {
+          const peopleRequest = App.createRequest({
+            url: `${kavitaAPI.url}/Metadata/people`,
+            method: "GET"
+          });
+          const peopleResponse = await requestManager.schedule(peopleRequest, 1);
+          const peopleResult = parseJSON(peopleResponse.data, []);
+          for (const name of peopleNames) {
+            const people = Array.isArray(peopleResult) ? peopleResult.filter((person) => person.name === name) : [];
+            seriesLists.push(people.length > 0 ? await filterSeries(personStatements(people), FILTER_COMBINATION_OR, requestManager, kavitaAPI) : []);
+          }
+        }
+        const [firstList = [], ...otherLists] = seriesLists;
+        const otherIds = otherLists.map((list) => new Set(list.map((series) => series.id)));
+        tagSeries = firstList.filter((series) => otherIds.every((ids) => ids.has(series.id)) && !excludeLibraryIds.includes(series.libraryId));
       }
-      result = tagSearchTiles.length > 0 && titleSearchTiles.length > 0 ? tagSearchTiles.filter((value) => titleSearchTiles.some((target) => target.image === value.image)) : titleSearchTiles.concat(tagSearchTiles);
+      if (tagSeries === null) {
+        result = titleSearchTiles;
+      } else {
+        const tagSearchTiles = tagSeries.map((series) => seriesTile(series, kavitaAPI));
+        result = hasTitle ? tagSearchTiles.filter((tile) => titleSearchIds.has(parseInt(tile.mangaId))) : tagSearchTiles;
+      }
       cacheManager.setCachedData(searchRequestToString(searchQuery), result);
     }
     result = result.slice(page * pageSize, (page + 1) * pageSize);
@@ -1327,7 +1331,7 @@ var _Sources = (() => {
     return a.volume === 0 || b.volume === 0 ? b.volume - a.volume : a.volume - b.volume;
   };
   var KavyaInfo = {
-    version: "1.3.7",
+    version: "1.3.8",
     name: "Kavya",
     icon: "icon.png",
     author: "Abishek Aditya",
@@ -1475,7 +1479,7 @@ var _Sources = (() => {
       const libraryResponse = await this.requestManager.schedule(libraryRequest, 1);
       const libraryResult = JSON.parse(libraryResponse.data || "[]");
       for (const library of libraryResult) {
-        if (excludeUnsupportedLibrary && library.type === 2) continue;
+        if (excludeUnsupportedLibrary && (library.type === 2 || library.type === 4)) continue;
         includeLibraryIds.push(library.id);
       }
       const tagNames = ["genres", "people", "tags"];
@@ -1497,7 +1501,7 @@ var _Sources = (() => {
                 case "people":
                   if (!names.includes(item.name)) {
                     names.push(item.name);
-                    tags.push(App.createTag({ id: `${tagName}-${item.role}.${item.id}`, label: item.name }));
+                    tags.push(App.createTag({ id: `${tagName}-${item.id}`, label: item.name }));
                   }
                   break;
                 default:
