@@ -1,7 +1,7 @@
 {
 	"name": "extensions-main",
 	"repositoryName": "abishekaditya's Extensions",
-	"version": "1.3.7",
+	"version": "1.3.8",
 	"description": "KenWeTech's Fork of the Paperback extension repository",
 	"main": "index.js",
 	"scripts": {
